@@ -1,0 +1,116 @@
+# ============================================================
+#  Job Auto-Apply settings: blank template for a new user.
+#  You don't need to edit this by hand: run the dashboard
+#  (double-click "Start Dashboard.bat") and fill in the setup wizard.
+#  It copies this file to config.yaml, which stays on YOUR computer.
+# ============================================================
+
+profile:
+  name: ""
+  email: ""
+
+naukri:
+  enabled: true
+  email: ""
+  password: ""
+linkedin:
+  enabled: true
+  email: ""
+  password: ""
+shine:
+  enabled: true
+  email: ""
+  password: ""
+foundit:
+  enabled: true
+  email: ""
+  password: ""
+cutshort:
+  enabled: true
+  email: ""
+  password: ""
+indeed:
+  enabled: false
+  email: ""
+  password: ""
+
+run_order: ["naukri", "linkedin", "foundit", "shine", "cutshort", "indeed"]
+
+search:
+  keywords: []              # e.g. ["Java Developer", "Spring Boot Developer"]
+  locations: []             # e.g. ["Bangalore", "Remote"]
+  experience_years: 0
+  posted_within_days: 7
+  pages_per_search: 3
+
+match:
+  # Each line is one skill; words separated by | count as the same skill.
+  skills: []
+  min_match_percent: 50
+  title_matches_search: true   # only apply when the job title matches one of search.keywords
+  title_must_include: []    # extra words that count as a matching title
+  title_exclude: ["intern", "internship", "trainee", "fresher", "manager", "director", "head"]
+  company_exclude: []
+
+skill_years: {}
+total_years_answer: "0"
+default_years: "0"
+
+answers:
+  phone: ""
+  "notice period": ""
+  "current ctc": ""
+  "expected ctc": ""
+  "current location": ""
+  "relocate": "Yes"
+  "hybrid": "Yes"
+  "work from office": "Yes"
+  "immediate": "No"
+  "authorized": "Yes"
+  "sponsorship": "No"
+  "contract or permanent": "Permanent"
+  "permanent or contract": "Permanent"
+  "employment type": "Permanent"
+  "job type": "Full Time"
+  "full time": "Yes"
+default_yes_no: "Yes"
+
+email_report:
+  enabled: false
+  send_to: ""
+  send_from: ""
+  app_password: ""
+  only_if_new_applications: false
+
+browser_mode: "attach"
+browser: "chrome"
+skip_login: true
+
+ai:
+  provider: "none"          # none, claude, gemini or openai
+  api_key: ""
+  model: ""
+  about_me: ""
+
+fill_unknown: true
+unknown_text_answer: "NA"
+wait_for_me: false
+wait_for_me_minutes: 5
+
+rotate_sites: true
+max_minutes_per_site: 15
+recheck_old_jobs: false
+
+dry_run: true
+max_applications_per_site: 25
+max_applications_per_day: 30      # per site, counting all runs today. Keeps your accounts safe. 0 = no limit
+rest_after_apply_min: 20          # seconds to rest after each application, like a person would
+rest_after_apply_max: 45
+min_delay_seconds: 4
+max_delay_seconds: 9
+
+dashboard:
+  schedule:
+    enabled: false
+    time: "10:00"
+    days: ["mon", "tue", "wed", "thu", "fri"]

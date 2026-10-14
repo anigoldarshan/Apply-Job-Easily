@@ -1,0 +1,75 @@
+# ============================================================
+#  Site definitions for the generic job sites.
+#  Job sites change their pages often. When a site stops working,
+#  fix it HERE — no Python needed.
+#
+#  Placeholders in search_url:
+#    {kw} keyword (URL-encoded)   {kw_slug} keyword like "python-developer"
+#    {loc} location (URL-encoded) {loc_slug} location like "bangalore"
+#    {exp} your years             {days} posted within N days
+#    {page} page number (1, 2, 3) {start} result offset = (page-1) * page_size
+#
+#  job_link_pattern: a regex; any link on the results page whose URL
+#  matches it is treated as a job.
+#  Selectors are tried in order; the first one that finds text wins.
+# ============================================================
+
+foundit:
+  name: Foundit
+  home_domain: foundit.in
+  login_url: "https://www.foundit.in/rio/login"
+  search_url: "https://www.foundit.in/srp/results?query={kw}&locations={loc}&experienceRanges={exp}~{exp}&start={start}"
+  page_size: 15
+  job_link_pattern: "foundit\\.in/job/"
+  title: ["h1", "[class*='jdTitle']"]
+  company: ["[class*='companyName']", "[class*='jdCompanyName']", "h2"]
+  experience: ["[class*='experience']", "[class*='exp']"]
+  description: ["[class*='jobDescription']", "[class*='jdDescription']", "main"]
+
+shine:
+  name: Shine
+  home_domain: shine.com
+  login_url: "https://www.shine.com/myshine/login/"
+  search_url: "https://www.shine.com/job-search/{kw_slug}-jobs-in-{loc_slug}-{page}?q={kw}&loc={loc}&minexp={exp}"
+  page_size: 20
+  job_link_pattern: "shine\\.com/jobs/"
+  title: ["h1"]
+  company: ["[class*='companyName']", "[class*='company_name']", "h2"]
+  experience: ["[class*='experience']", "[class*='exp']"]
+  description: ["[class*='jobDescription']", "[class*='job_description']", "main"]
+
+cutshort:
+  name: Cutshort
+  home_domain: cutshort.io
+  login_url: "https://cutshort.io/login"
+  search_url: "https://cutshort.io/jobs/{kw_slug}-jobs-in-{loc_slug}"
+  page_size: 0                    # 0 = single page with infinite scroll
+  scrolls: 10                     # how far to scroll to load more jobs
+  job_link_pattern: "cutshort\\.io/job/"
+  title: ["h1"]
+  company: ["[class*='company']", "h2"]
+  experience: ["[class*='experience']"]
+  description: ["[class*='description']", "main"]
+
+indeed:
+  name: Indeed
+  home_domain: indeed.com
+  login_url: "https://secure.indeed.com/auth"
+  search_url: "https://in.indeed.com/jobs?q={kw}&l={loc}&fromage={days}&start={start}"
+  page_size: 10
+  job_link_pattern: "jk=[0-9a-f]+"
+  job_id_regex: "jk=([0-9a-f]+)"                       # turn messy tracking links into clean job URLs
+  job_url_template: "https://in.indeed.com/viewjob?jk={id}"
+  title: ["h1", "[data-testid='jobsearch-JobInfoHeader-title']"]
+  company: ["[data-testid='inlineHeader-companyName']", "[data-company-name]"]
+  experience: []
+  description: ["#jobDescriptionText", "main"]
+
+# Shared wording used to find buttons on every generic site (regex, case-insensitive)
+buttons:
+  apply: "^(easy |quick |1-click )?apply( now)?$"
+  external: "company site|company website|apply externally|apply on"
+  already_applied: "^applied$|already applied|application sent"
+  next_step: "^(continue|next|review|save and continue|proceed)$"
+  submit: "^(submit|submit application|submit your application|send application|confirm and apply)$"
+  success_text: "application (has been )?(submitted|sent)|successfully applied|applied successfully|you applied|your application was sent"

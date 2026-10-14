@@ -1,0 +1,19 @@
+# Only the program is tracked. Everything personal stays on your computer:
+# config.yaml (passwords, keys, phone, CTC), jobs.db, applied_jobs.csv, job_report.xlsx,
+# learned_answers.yaml, tracking.json, resume/, logs/, backups, Chrome profiles, zips.
+/*
+!/.gitignore
+!/job_bot.py
+!/jobdb.py
+!/secret_store.py
+!/report.py
+!/dashboard.py
+!/make_package.py
+!/sites.yaml
+!/config.example.yaml
+!/requirements.txt
+!/Install.bat
+!/Start Dashboard.bat
+!/start_chrome.bat
+!/README.md
+!/dashboard_ui/
