@@ -20,6 +20,20 @@ This bot logs in to your accounts, searches with your keywords, location and exp
 The wrench icon at the bottom left shows **advanced options** (extra settings, answer memory, site rules). The moon icon switches light/dark, and the **?** icon opens help.
 You get a chime (and a desktop notification) when the bot needs you or a run finishes.
 
+### Signing in (Logins page)
+
+Open **Logins** in the dashboard menu any time, not just during setup:
+
+- **Open all login tabs** opens one tab per switched-on site (plus Google) in the bot's Chrome. If that Chrome is already open, the tabs are added to it.
+- **Open** next to a site opens just that site, e.g. when you forgot it or got logged out. This works while a run is going too.
+- Click **Signed in** on each site once you've logged in (or **I'm signed in to all**). Use **Undo** to mark one again.
+
+From a terminal: `python site_login.py` opens every enabled site, and `python site_login.py naukri linkedin` opens only those (the bot's Chrome must be open).
+
+### Run all sites at the same time
+
+When you start a run, tick **Run all sites at the same time**. Each switched-on site then gets its own bot and its own Chrome tab, and they all work at once instead of one site after another. The Activity page shows every site still working, and the report is built and emailed once, when the last one finishes. Daily limits, Stop and duplicate checks still work across sites. It's faster but uses more memory, and sites are more likely to show captchas, so leave it off on a slow computer.
+
 ### Applying automatically, never twice
 
 Every job the bot looks at is saved in a small local database, **jobs.db** (SQLite, next to the bot; your old applied_jobs.csv history is imported the first time).

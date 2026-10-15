@@ -57,6 +57,11 @@ except FileNotFoundError:
 WAIT_SECS = int(CFG.get("wait_for_me_minutes", 5)) * 60
 MAX_MIN_PER_SITE = float(CFG.get("max_minutes_per_site", 0) or 0)
 
+# "Run all sites at the same time": the dashboard starts one bot per site with JOBBOT_SITES=<site>,
+# and builds the report itself once they've all finished.
+ONLY_SITES = [k.strip() for k in os.environ.get("JOBBOT_SITES", "").split(",") if k.strip()]
+NO_REPORT = os.environ.get("JOBBOT_NO_REPORT") == "1"
+
 # Resume uploaded in the dashboard: attached to forms that ask for one, and read by the AI helper.
 _resume_rel = (CFG.get("resume") or {}).get("file")
 RESUME = os.path.join(HERE, _resume_rel) if _resume_rel and os.path.isfile(os.path.join(HERE, _resume_rel)) else None
@@ -82,6 +87,11 @@ def remember(question, answer):
         return
     if LEARNED.get(q) == answer:
         return
+    if ONLY_SITES:   # other bots running in parallel may have learned answers since we started
+        try:
+            LEARNED.update({k: v for k, v in (yaml.safe_load(open(LEARNED_FILE, encoding="utf-8")) or {}).items() if k not in LEARNED})
+        except Exception:
+            pass
     LEARNED[q] = str(answer).strip()
     with open(LEARNED_FILE, "w", encoding="utf-8") as f:
         f.write("# Answers the bot learned from you. Edit or delete lines freely.\n")
@@ -381,6 +391,11 @@ def load_seen():
 
 def duplicate(title, company):
     """Same role at the same company already applied (reposted ad, or listed on another site)."""
+    if ONLY_SITES and title not in ("", "?"):   # bots on other sites may have applied to it just now
+        try:
+            APPLIED_KEYS.update(jobdb.applied_keys())
+        except Exception:
+            pass
     return title not in ("", "?") and job_key(title, company) in APPLIED_KEYS
 
 
@@ -1324,7 +1339,7 @@ def main():
         totals = {}
         try:
             order = [k for k in (CFG.get("run_order") or ["naukri", "linkedin", *SITES.keys()])
-                     if CFG.get(k, {}).get("enabled")]
+                     if CFG.get(k, {}).get("enabled") and (not ONLY_SITES or k in ONLY_SITES)]
             all_kw = list(S["keywords"])
             # rotate: keyword 1 on every site, then keyword 2 on every site ... so all sites get a turn
             rounds = [[kw] for kw in all_kw] if CFG.get("rotate_sites", True) else [all_kw]
@@ -1369,12 +1384,13 @@ def main():
                 except Exception: pass
             else:
                 ctx.close()
-            try:
-                from report import build_report, send_report
-                build_report()
-                send_report(since=run_started)
-            except Exception as e:
-                print("Couldn't build the Excel report:", e, "(run: python report.py)")
+            if not NO_REPORT:
+                try:
+                    from report import build_report, send_report
+                    build_report()
+                    send_report(since=run_started)
+                except Exception as e:
+                    print("Couldn't build the Excel report:", e, "(run: python report.py)")
 
 
 if __name__ == "__main__":
