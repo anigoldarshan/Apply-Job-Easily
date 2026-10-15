@@ -1280,13 +1280,22 @@ def open_browser(pw):
     """
     global ATTACHED
     if CFG.get("browser_mode", "attach") == "attach":
-        try:
-            browser = pw.chromium.connect_over_cdp("http://127.0.0.1:9222", timeout=8000)
-            ATTACHED = True
-            print("Browser: connected to your Chrome (start_chrome.bat)")
-            return browser.contexts[0] if browser.contexts else browser.new_context()
-        except Exception:
-            sys.exit("\nChrome isn't open in bot mode.\n"
+        # Several bots (one per site) may connect at once, and Chrome with many tabs answers slowly: be patient.
+        time.sleep(float(os.environ.get("JOBBOT_START_DELAY", 0) or 0))   # the dashboard staggers parallel bots
+        err = None
+        for attempt in range(3):
+            try:
+                browser = pw.chromium.connect_over_cdp("http://127.0.0.1:9222", timeout=30000)
+                ATTACHED = True
+                print("Browser: connected to your Chrome (start_chrome.bat)")
+                return browser.contexts[0] if browser.contexts else browser.new_context()
+            except Exception as e:
+                err = e
+                print(f"Couldn't reach Chrome yet ({str(e).splitlines()[0][:120]}), trying again...")
+                time.sleep(3 + 2 * attempt)
+        if err:
+            sys.exit(f"\nCouldn't connect to Chrome: {str(err).splitlines()[0][:200]}\n"
+                     "\nChrome isn't open in bot mode.\n"
                      "  1. Close ALL Chrome windows.\n"
                      "  2. Double-click start_chrome.bat in this folder.\n"
                      "  3. Run python job_bot.py again.\n")

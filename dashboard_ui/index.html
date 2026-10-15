@@ -708,17 +708,28 @@ function openStart() {
       <div class="choice" data-m="live"><span class="em">🚀</span><b>Live run</b><small>Applies automatically to good matches, up to ${esc(pl.max_per_site)} per site. Skips jobs you've already applied to.</small></div>
     </div>
     <div class="plan">
-      <div class="r"><span class="k">Job sites</span><span>${(pl.sites || []).map(s => `<span class="tag">${esc(s)}</span>`).join(" ") || '<span style="color:var(--bad)">none switched on</span>'}</span></div>
+      <div class="r"><span class="k">Job sites</span><span style="display:flex;flex-wrap:wrap;gap:6px">${(pl.sites || []).map((s, i) => `<label class="tag" style="cursor:pointer;display:inline-flex;gap:5px;align-items:center;padding:3px 9px"><input type="checkbox" data-site="${esc((pl.site_keys || [])[i])}">${esc(s)}</label>`).join("") || '<span style="color:var(--bad)">none switched on</span>'}</span></div>
+      ${(pl.sites || []).length > 1 ? `<div class="r"><span class="k"></span><span class="small muted">Untick the sites you don't want this time. <a href="#" data-all>Select all</a></span></div>` : ""}
       <div class="r"><span class="k">Searching for</span><span>${esc((pl.keywords || []).join(", ")) || "—"}</span></div>
       <div class="r"><span class="k">In</span><span>${esc((pl.locations || []).join(", ")) || "—"}</span></div>
       <div class="r"><span class="k">Applies when</span><span>at least ${esc(pl.min_match)}% of your skills match</span></div>
       ${pl.pending ? `<div class="r" data-pend><span class="k">From test runs</span><span><b>${num(pl.pending)} good match${pl.pending === 1 ? "" : "es"}</b> waiting. A live run applies to these first.</span></div>` : ""}
     </div>
-    ${(pl.sites || []).length > 1 ? `<label class="callout" style="margin-top:14px;display:flex;gap:10px;align-items:flex-start;cursor:pointer"><input type="checkbox" data-par style="margin-top:3px"><span><b>Run all sites at the same time</b><br><span class="small muted">Each site gets its own Chrome tab and works in parallel, instead of one site after another. Faster, but uses more of your computer.</span></span></label>` : ""}
+    ${(pl.sites || []).length > 1 ? `<label class="callout" style="margin-top:14px;display:flex;gap:10px;align-items:flex-start;cursor:pointer"><input type="checkbox" data-par style="margin-top:3px"><span><b>Run the selected sites at the same time</b><br><span class="small muted">Each site gets its own Chrome tab and works in parallel, instead of one site after another. Faster, but uses more of your computer.</span></span></label>` : ""}
     ${!ob.signed_in && STATE.browser_mode === "attach" ? `<div class="callout warn" style="margin-top:14px">You haven't confirmed you're signed in to your job sites yet. The bot can only apply where you're logged in. <a href="#" data-signin>Sign in first</a></div>` : ""}
     <div class="small muted" style="margin-top:12px">Chrome opens by itself. Leave it open; you can watch the bot work in it.</div>
     <div class="modal-acts"><button class="btn ghost l" data-go="settings:search">Change these</button><button class="btn" data-x>Cancel</button><button class="btn primary lg" data-run></button></div>`);
-  const paint = () => { $$(".choice", m).forEach(c => c.classList.toggle("on", c.dataset.m === mode)); $("[data-pend]", m)?.classList.toggle("hidden", mode !== "live"); $("[data-run]", m).innerHTML = I.play + (mode === "test" ? "Start test run" : "Start applying"); };
+  const picked = () => $$("[data-site]", m).filter(c => c.checked).map(c => c.dataset.site);
+  const paint = () => {
+    $$(".choice", m).forEach(c => c.classList.toggle("on", c.dataset.m === mode)); $("[data-pend]", m)?.classList.toggle("hidden", mode !== "live");
+    const n = picked().length, all = n === $$("[data-site]", m).length;
+    $("[data-run]", m).disabled = !n;
+    $("[data-run]", m).innerHTML = I.play + (mode === "test" ? "Start test run" : "Start applying") + (n && !all ? ` (${n} site${n === 1 ? "" : "s"})` : "");
+  };
+  const saved = store.get("runSites", null);
+  $$("[data-site]", m).forEach(c => { c.checked = !saved || saved.includes(c.dataset.site); c.onchange = paint; });
+  if (!picked().length) $$("[data-site]", m).forEach(c => c.checked = true);
+  $("[data-all]", m)?.addEventListener("click", e => { e.preventDefault(); $$("[data-site]", m).forEach(c => c.checked = true); paint(); });
   $$(".choice", m).forEach(c => c.onclick = () => { mode = c.dataset.m; paint(); });
   $("[data-x]", m).onclick = () => m.remove();
   $("[data-go]", m).addEventListener("click", () => m.remove());
@@ -727,8 +738,8 @@ function openStart() {
     const btn = e.currentTarget; btn.disabled = true; btn.textContent = "Opening Chrome and starting…";
     try {
       try { if (Notification.permission === "default") Notification.requestPermission(); } catch {}
-      const par = !!$("[data-par]", m)?.checked; store.set("parallel", par);
-      await api("/api/bot/start", {body: {dry_run: mode === "test", parallel: par}}); m.remove(); toast(mode === "test" ? "Test run started" : "Live run started"); await refresh(); go("activity");
+      const par = !!$("[data-par]", m)?.checked, sites = picked(); store.set("parallel", par); store.set("runSites", sites);
+      await api("/api/bot/start", {body: {dry_run: mode === "test", parallel: par, sites}}); m.remove(); toast(mode === "test" ? "Test run started" : "Live run started"); await refresh(); go("activity");
     } catch (err) { toast(err.message, true); btn.disabled = false; paint(); }
   };
   if ($("[data-par]", m)) $("[data-par]", m).checked = store.get("parallel", false);
@@ -929,7 +940,7 @@ function renderActivityLive() {
   $("#feedCount").textContent = ev.length ? plural(ev.length, "job") : "";
   $("#feed").innerHTML = ev.length ? ev.map(e => `<div class="ev"><div class="e c-${e.category}">${CAT_ICON[e.category]}</div><div class="g"><div><b>${esc(CAT[e.category])}</b> · ${esc(e.title === "?" ? "Job title not found" : e.title)}</div><div class="small muted">${esc(e.company === "?" ? "Company not shown" : e.company)} · ${esc(e.site)} · ${e.match}% match</div></div><time>${e.time}</time></div>`).join("")
     : `<div class="empty">${b.running ? "Opening Chrome and searching… the first jobs show up here in a minute." : "No jobs were checked in this run."}</div>`;
-  $("#siteSteps").innerHTML = (pl.sites || []).map(n => {
+  $("#siteSteps").innerHTML = ((p.run_sites || []).length ? p.run_sites : pl.sites || []).map(n => {
     const s = p.sites[n], cur = b.running && (p.parallel ? (p.running_sites || []).includes(n) : p.site === n), done = s && !cur;
     return `<div class="site-step ${cur ? "cur" : done ? "done" : ""}"><span class="st">${cur ? "▶" : done ? "✓" : ""}</span>${siteLogo(n, 30)}<div style="flex:1;min-width:0"><b>${esc(n)}</b><div class="small muted">${s ? `${s.checked} checked · ${test ? s.dry : s.applied} ${test ? "good matches" : "applied"}${s.manual ? ` · ${s.manual} yourself` : ""}` : cur ? "searching…" : b.running ? "waiting its turn" : "not reached"}</div></div></div>`;
   }).join("") || `<div class="empty">No sites switched on.</div>`;

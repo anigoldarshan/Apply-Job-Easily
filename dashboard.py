@@ -260,15 +260,21 @@ class Bot:
                 except Exception:
                     pass
 
-    def start(self, dry_run=None, trigger="manual", task=None, parallel=False):
+    def start(self, dry_run=None, trigger="manual", task=None, parallel=False, sites=None):
+        """sites: only these site keys (from the ones switched on); parallel: one bot per site, all at once."""
         if self.running:
             return False, "The bot is already running."
         cfg = load_config()
         keys = [""]
-        if parallel and not task:
-            keys = [k for k in (cfg.get("run_order") or SITE_NAMES) if (cfg.get(k) or {}).get("enabled")]
-            if not keys:
-                return False, "No job sites are switched on."
+        chosen = []
+        if not task:
+            chosen = [k for k in (cfg.get("run_order") or SITE_NAMES) if (cfg.get(k) or {}).get("enabled")]
+            if sites:
+                chosen = [k for k in chosen if k in sites]
+            if not chosen:
+                return False, "Pick at least one job site." if sites else "No job sites are switched on."
+            if parallel:
+                keys = chosen
         if os.path.exists(STOP_FILE):
             os.remove(STOP_FILE)
         dry = bool(cfg.get("dry_run", True)) if dry_run is None else bool(dry_run)
@@ -276,7 +282,9 @@ class Bot:
             dry = False
         env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1",
                    JOBBOT_DRY_RUN="1" if dry else "0", JOBBOT_FROM_DASHBOARD="1")
-        env.pop("JOBBOT_SITES", None); env.pop("JOBBOT_NO_REPORT", None)
+        env.pop("JOBBOT_SITES", None); env.pop("JOBBOT_NO_REPORT", None); env.pop("JOBBOT_START_DELAY", None)
+        if sites and not parallel and not task:   # one bot, only the sites you picked
+            env["JOBBOT_SITES"] = ",".join(chosen)
         os.makedirs(LOG_DIR, exist_ok=True)
         stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
         self.logfile = open(os.path.join(LOG_DIR, f"run_{stamp}{'_naukri-resume' if task else '_test' if dry else ''}.log"), "w", encoding="utf-8")
@@ -286,6 +294,7 @@ class Bot:
             self.progress = blank_progress()
             self.progress["parallel"] = self.parallel
             self.progress["running_sites"] = [self._name(k) for k in keys if k]
+            self.progress["run_sites"] = [self._name(k) for k in chosen]   # the sites in this run, for the Activity page
         self.started, self.finished, self.exit_code = datetime.now(), None, None
         self.mode, self.trigger = ("resume" if task else "test" if dry else "live"), trigger
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
@@ -294,8 +303,9 @@ class Bot:
                   f"{self.started:%d %b %Y %H:%M} ({trigger}{', all sites at the same time' if self.parallel else ''}) ===", own=True)
         with LOCK:   # held until every site's bot has started, so none counts as "the last one done" too early
             self.procs = {}
-            for key in keys:
-                e = dict(env, JOBBOT_SITES=key, JOBBOT_NO_REPORT="1") if key else env
+            for i, key in enumerate(keys):
+                # one bot per site, started 3 s apart so they don't all hit Chrome at once
+                e = dict(env, JOBBOT_SITES=key, JOBBOT_NO_REPORT="1", JOBBOT_START_DELAY=str(3 * i)) if self.parallel else env
                 proc = subprocess.Popen(args, cwd=HERE, env=e,
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                         text=True, encoding="utf-8", errors="replace", bufsize=1, creationflags=flags)
@@ -511,7 +521,7 @@ def api_state():
                     "email": bool(er.get("enabled") and er.get("app_password") and er.get("send_to")),
                     "schedule": bool((dash.get("schedule") or {}).get("enabled")),
                     "resume": bool(resume_path(cfg))},
-        run_plan={"sites": [SITE_NAMES.get(k, k) for k in sites_on],
+        run_plan={"sites": [SITE_NAMES.get(k, k) for k in sites_on], "site_keys": sites_on,
                   "keywords": (cfg.get("search") or {}).get("keywords") or [],
                   "locations": (cfg.get("search") or {}).get("locations") or [],
                   "max_per_site": cfg.get("max_applications_per_site", 25),
@@ -745,7 +755,7 @@ def api_bot_start():
         ok, msg = open_chrome(with_logins=False)
         if not ok:
             return jsonify(ok=False, error=msg), 400
-    ok, msg = BOT.start(dry_run=body.get("dry_run"), parallel=bool(body.get("parallel")))
+    ok, msg = BOT.start(dry_run=body.get("dry_run"), parallel=bool(body.get("parallel")), sites=body.get("sites") or None)
     return jsonify(ok=ok, error=None if ok else msg)
 
 
