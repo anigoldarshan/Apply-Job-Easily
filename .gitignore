@@ -6,6 +6,7 @@
 !/job_bot.py
 !/jobdb.py
 !/secret_store.py
+!/site_login.py
 !/report.py
 !/dashboard.py
 !/make_package.py

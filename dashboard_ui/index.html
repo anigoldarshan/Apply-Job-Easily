@@ -341,6 +341,7 @@ details.tech[open] summary .chev{transform:rotate(90deg)}
     <div class="brand"><div class="logo"><svg class="i" viewBox="0 0 24 24" style="width:17px;height:17px;stroke-width:2.4"><path d="M4 9h16v11H4zM9 9V5h6v4"/></svg></div>Job Bot</div>
     <button class="nav" data-page="home"><svg class="i" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span>Home</span></button>
     <button class="nav" data-page="activity"><svg class="i" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg><span>Activity</span><i id="navLive" class="live hidden"></i></button>
+    <button class="nav" data-page="logins"><svg class="i" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14.5 8.5l2.5 2.5"/></svg><span>Logins</span></button>
     <button class="nav" data-page="jobs"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg><span>Jobs</span><i id="navTodo" class="badge hidden"></i></button>
     <button class="nav" data-page="questions"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="M9.2 9.3a2.9 2.9 0 0 1 5.6 1c0 1.9-2.8 2.6-2.8 4.2M12 17.6h.01"/></svg><span>Questions</span><i id="navQs" class="badge hidden"></i></button>
     <button class="nav" data-page="settings"><svg class="i" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg><span>Settings</span></button>
@@ -414,7 +415,7 @@ const SITES = {naukri: {n: "Naukri", c: "#2d7ff9", note: "Applies and answers th
   shine: {n: "Shine", c: "#d99500", note: "Applies through the site's form"},
   cutshort: {n: "Cutshort", c: "#11998e", note: "Applies through the site's form"},
   indeed: {n: "Indeed", c: "#2557a7", note: "Strong bot checks; may ask you to prove you're human"}};
-const SITE_BY_NAME = Object.fromEntries(Object.values(SITES).map(v => [v.n, v]));
+const SITE_BY_NAME = {Google: {n: "Google", c: "#ea4335"}, ...Object.fromEntries(Object.values(SITES).map(v => [v.n, v]))};
 const CAT = {applied: "Applied", manual: "Apply manually", dry: "Good match (test)", skipped: "Skipped", error: "Didn't load"};
 const CAT_ICON = {applied: "✅", manual: "👉", dry: "🧪", skipped: "⏭️", error: "⚠️"};
 const ST_APPLIED = ["Applied", "Viewed", "Interview", "Offer", "Rejected", "No reply"];
@@ -652,7 +653,7 @@ function notifyChanges() {
 }
 
 /* =================================================================== router */
-const PAGES = {home: ["Home", renderHome], activity: ["Activity", renderActivity], jobs: ["Jobs", renderJobs], settings: ["Settings", renderSettings],
+const PAGES = {home: ["Home", renderHome], activity: ["Activity", renderActivity], logins: ["Logins", renderLogins], jobs: ["Jobs", renderJobs], settings: ["Settings", renderSettings],
   questions: ["Questions", renderQuestions], memory: ["Answer memory", renderMemory], sites: ["Site rules", renderSites]};
 function go(p, arg) {
   if (!PAGES[p] || ((p === "memory" || p === "sites") && !ADV)) p = "home";
@@ -713,6 +714,7 @@ function openStart() {
       <div class="r"><span class="k">Applies when</span><span>at least ${esc(pl.min_match)}% of your skills match</span></div>
       ${pl.pending ? `<div class="r" data-pend><span class="k">From test runs</span><span><b>${num(pl.pending)} good match${pl.pending === 1 ? "" : "es"}</b> waiting. A live run applies to these first.</span></div>` : ""}
     </div>
+    ${(pl.sites || []).length > 1 ? `<label class="callout" style="margin-top:14px;display:flex;gap:10px;align-items:flex-start;cursor:pointer"><input type="checkbox" data-par style="margin-top:3px"><span><b>Run all sites at the same time</b><br><span class="small muted">Each site gets its own Chrome tab and works in parallel, instead of one site after another. Faster, but uses more of your computer.</span></span></label>` : ""}
     ${!ob.signed_in && STATE.browser_mode === "attach" ? `<div class="callout warn" style="margin-top:14px">You haven't confirmed you're signed in to your job sites yet. The bot can only apply where you're logged in. <a href="#" data-signin>Sign in first</a></div>` : ""}
     <div class="small muted" style="margin-top:12px">Chrome opens by itself. Leave it open; you can watch the bot work in it.</div>
     <div class="modal-acts"><button class="btn ghost l" data-go="settings:search">Change these</button><button class="btn" data-x>Cancel</button><button class="btn primary lg" data-run></button></div>`);
@@ -725,9 +727,11 @@ function openStart() {
     const btn = e.currentTarget; btn.disabled = true; btn.textContent = "Opening Chrome and starting…";
     try {
       try { if (Notification.permission === "default") Notification.requestPermission(); } catch {}
-      await api("/api/bot/start", {body: {dry_run: mode === "test"}}); m.remove(); toast(mode === "test" ? "Test run started" : "Live run started"); await refresh(); go("activity");
+      const par = !!$("[data-par]", m)?.checked; store.set("parallel", par);
+      await api("/api/bot/start", {body: {dry_run: mode === "test", parallel: par}}); m.remove(); toast(mode === "test" ? "Test run started" : "Live run started"); await refresh(); go("activity");
     } catch (err) { toast(err.message, true); btn.disabled = false; paint(); }
   };
+  if ($("[data-par]", m)) $("[data-par]", m).checked = store.get("parallel", false);
   paint();
 }
 function stopRun() {
@@ -737,18 +741,41 @@ function stopRun() {
   $("[data-stop]", m).onclick = async () => { await api("/api/bot/stop", {method: "POST"}); m.remove(); toast("Stopping after the current job…"); refresh(); };
   $("[data-kill]", m).onclick = async () => { await api("/api/bot/kill", {method: "POST"}); m.remove(); toast("Stopped"); refresh(); };
 }
-function openSignIn() {
-  const m = modal(`<h2>Sign in to your job sites</h2><div class="muted">You only do this once. The bot uses its own Chrome window and remembers your logins.</div>
-    <ol style="margin:18px 0 0;padding-left:20px;display:flex;flex-direction:column;gap:10px">
-      <li>Click <b>Open Chrome</b>. A Chrome window opens with a tab for Google and one for each job site.</li>
-      <li>Sign in to <b>Google</b> first. Then on each job site, use <b>“Continue with Google”</b> (or your email and password).</li>
-      <li>Leave that Chrome window open, come back here and click <b>I'm signed in</b>.</li>
-    </ol>
-    <div class="callout" style="margin-top:16px">If Chrome says it can't open, close every Chrome window (check the taskbar tray too) and try again.</div>
-    <div class="modal-acts"><button class="btn ghost l" data-x>Later</button><button class="btn" data-open>Open Chrome</button><button class="btn primary" data-done>${I.check} I'm signed in</button></div>`);
-  $("[data-x]", m).onclick = () => m.remove();
-  $("[data-open]", m).onclick = async e => { const b = e.currentTarget; b.disabled = true; b.textContent = "Opening…"; try { const r = await api("/api/chrome/open", {method: "POST"}); toast(r.message); } catch (err) { toast(err.message, true); } b.disabled = false; b.textContent = "Open Chrome"; refresh(); };
-  $("[data-done]", m).onclick = async () => { await api("/api/prefs", {body: {signed_in: true}}); m.remove(); toast("Great! Next: a test run."); await refresh(); if (page === "home") renderHomeLive(); };
+function openSignIn() { go("logins"); }
+
+/* =================================================================== LOGINS */
+async function renderLogins() {
+  $("#pageTitle").innerHTML = `Sign in to your job sites<span class="sub">Log in again any time: one site, or all of them at once</span>`;
+  $("#view").innerHTML = `<div id="loginTop"></div><div class="card mt"><div class="card-h"><h2>Your sites</h2><span class="muted small" id="loginCount"></span><div class="r"><button class="btn sm ghost" data-go="settings:sites">Choose sites</button></div></div><div id="loginList"></div></div>
+    <div class="card mt"><div class="card-h"><h2>Tips</h2></div><ul class="small muted" style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px">
+      <li>Sign in to <b>Google</b> first, then use <b>“Continue with Google”</b> on each job site (or your email and password).</li>
+      <li>Tabs open in the bot's own Chrome window, so the bot can use your logins. Leave that window open.</li>
+      <li>Got logged out, or forgot a site before starting? Open that site here again and sign in. This works while a run is going too.</li>
+      <li>If Chrome says it can't open, close every Chrome window (check the taskbar tray too) and try again.</li></ul></div>`;
+  await paintLogins();
+}
+async function paintLogins() {
+  let d; try { d = await api("/api/logins"); } catch (e) { toast(e.message, true); return; }
+  if (page !== "logins") return;
+  const on = d.sites.filter(x => x.enabled), off = d.sites.filter(x => !x.enabled), done = on.filter(x => x.signed_in).length;
+  $("#loginTop").innerHTML = `<div class="hero ${done === on.length ? "good" : ""}"><div class="ic">${done === on.length ? "✅" : "🔐"}</div><div class="tx">
+      <h2>${done === on.length ? "You're signed in everywhere" : `Signed in to ${done} of ${on.length}`}</h2>
+      <p>${d.chrome ? "The bot's Chrome is open." : d.chrome_found ? "The bot's Chrome opens when you click a button." : "Google Chrome wasn't found. Install it from google.com/chrome."} Click <b>Open all login tabs</b> to get one tab per site, or <b>Open</b> on a single site. Then mark each one when you're signed in.</p></div>
+      <div class="acts"><button class="btn primary lg" data-openall>Open all login tabs</button>${done < on.length ? `<button class="btn" data-markall>${I.check} I'm signed in to all</button>` : ""}</div></div>`;
+  const row = x => `<div class="rw">${siteLogo(x.name, 34)}<div class="g"><div class="t">${esc(x.name)}${x.key === "google" ? ' <span class="tag">sign in first</span>' : ""}</div>
+      <div class="d">${x.signed_in ? `<span class="chip c-applied">${I.check} Signed in</span> <span class="faint">marked ${esc(ago(x.signed_in.replace(" ", "T")))}</span>` : x.enabled ? '<span class="chip c-manual">Not confirmed</span>' : '<span class="chip c-skipped">Switched off</span>'}</div></div>
+      <button class="btn sm" data-open="${esc(x.key)}">Open ${I.ext}</button>
+      ${x.enabled ? (x.signed_in ? `<button class="btn sm ghost" data-unmark="${esc(x.key)}">Undo</button>` : `<button class="btn sm primary" data-mark="${esc(x.key)}">${I.check} Signed in</button>`) : ""}</div>`;
+  $("#loginCount").textContent = `${done} of ${on.length} signed in`;
+  $("#loginList").innerHTML = on.map(row).join("") + (off.length ? `<div class="small faint" style="margin:14px 4px 4px">Switched off (the bot won't use these)</div>` + off.map(row).join("") : "");
+  const busy = async (btn, fn) => { const t = btn.innerHTML; btn.disabled = true; btn.textContent = "Opening…"; try { await fn(); } finally { btn.disabled = false; btn.innerHTML = t; } };
+  const open = async sites => { try { const r = await api("/api/logins/open", {body: {sites}}); toast(r.message); } catch (e) { toast(e.message, true); } refresh(); };
+  const mark = async body => { try { await api("/api/logins/mark", {body}); } catch (e) { toast(e.message, true); } await refresh(); paintLogins(); };
+  $("[data-openall]").onclick = e => busy(e.currentTarget, () => open([]));
+  $("[data-markall]")?.addEventListener("click", () => mark({all: true}).then(() => toast("Great! Next: start a run.")));
+  $$("[data-open]").forEach(b => b.onclick = e => busy(e.currentTarget, () => open([b.dataset.open])));
+  $$("[data-mark]").forEach(b => b.onclick = () => mark({site: b.dataset.mark, signed_in: true}));
+  $$("[data-unmark]").forEach(b => b.onclick = () => mark({site: b.dataset.unmark, signed_in: false}));
 }
 
 /* =================================================================== HOME */
@@ -777,7 +804,7 @@ function renderHomeLive() {
     acts = (p.waiting === "login" ? `<button class="btn primary lg" data-enter>Continue</button>` : "") + `<button class="btn" data-go="activity">See activity</button>`;
   } else if (b.running) {
     cls = "good"; ic = b.mode === "test" ? "🧪" : b.mode === "resume" ? "📄" : "⚡"; t = b.mode === "test" ? "Test run in progress" : b.mode === "resume" ? "Updating your resume on Naukri…" : "Applying to jobs…";
-    d = `${p.site ? "Now on <b>" + esc(p.site) + "</b>" : "Starting up"}${p.search ? ` · “${esc(p.search.keyword)}” in ${esc(p.search.location)}` : ""} · running ${dur(b.started)}`
+    d = `${p.parallel ? `All sites at once · <b>${(p.running_sites || []).length}</b> still working` : p.site ? "Now on <b>" + esc(p.site) + "</b>" : "Starting up"}${p.search ? ` · “${esc(p.search.keyword)}” in ${esc(p.search.location)}` : ""} · running ${dur(b.started)}`
       + `<span class="mini-stats"><div><b>${c.checked || 0}</b>checked</div><div><b>${b.mode === "test" ? c.dry || 0 : c.applied || 0}</b>${b.mode === "test" ? "good matches" : "applied"}</div><div><b>${c.manual || 0}</b>apply manually</div></span>`;
     acts = `<button class="btn primary" data-go="activity">Watch live</button><button class="btn danger" data-stop>${I.stop}Stop</button>`;
   } else if (!ob.signed_in && STATE.browser_mode === "attach") {
@@ -885,7 +912,7 @@ function renderActivityLive() {
   top.innerHTML = `
     ${b.running && p.waiting ? `<div class="needs" style="margin-bottom:16px"><div style="font-size:28px">✋</div><div class="tx"><b>${p.waiting === "login" ? "Finish logging in" : "A site asked a question"}</b><div class="small">${esc(p.waiting_text.replace(/,? then (press Enter|click Continue).*$/i, "."))}</div><div class="small muted">${p.waiting === "login" ? "Log in in the Chrome window, then click Continue." : "Answer it in the Chrome window. The bot carries on by itself and remembers your answer."}</div></div>${p.waiting === "login" ? `<button class="btn warn lg" id="actEnter">Continue</button>` : ""}</div>` : ""}
     <div class="card"><div class="live-head"><div style="flex:1;min-width:220px"><div class="big">${status}</div>
-      <div class="muted small">${test ? "Test run, nothing is applied" : "Live run"} · started ${new Date(b.started).toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"})} · ${b.running ? "running " + dur(b.started) : "took " + dur(b.started, b.finished)}${b.running && p.site ? ` · now on <b>${esc(p.site)}</b>${p.search ? `, “${esc(p.search.keyword)}” page ${p.search.page}` : ""}` : ""}</div></div>
+      <div class="muted small">${test ? "Test run, nothing is applied" : "Live run"} · started ${new Date(b.started).toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"})} · ${b.running ? "running " + dur(b.started) : "took " + dur(b.started, b.finished)}${b.running && p.parallel ? ` · all sites at once, <b>${(p.running_sites || []).length}</b> still working` : b.running && p.site ? ` · now on <b>${esc(p.site)}</b>${p.search ? `, “${esc(p.search.keyword)}” page ${p.search.page}` : ""}` : ""}</div></div>
       ${b.running ? `<button class="btn danger" id="actStop">${I.stop}Stop</button>` : `<button class="btn" data-go="jobs:${test ? "test" : "applied"}">See results</button><button class="btn primary" id="actStart">${I.play}Run again</button>`}</div>
       ${!b.running && b.exit_code && !c.checked ? `<div class="callout warn" style="margin-top:14px">The run stopped before checking any jobs. Open the technical log below to see why. Most often Chrome was closed, or a package is missing (run Install.bat again).</div>` : ""}
       <div class="counters" style="margin-top:16px">
@@ -903,7 +930,7 @@ function renderActivityLive() {
   $("#feed").innerHTML = ev.length ? ev.map(e => `<div class="ev"><div class="e c-${e.category}">${CAT_ICON[e.category]}</div><div class="g"><div><b>${esc(CAT[e.category])}</b> · ${esc(e.title === "?" ? "Job title not found" : e.title)}</div><div class="small muted">${esc(e.company === "?" ? "Company not shown" : e.company)} · ${esc(e.site)} · ${e.match}% match</div></div><time>${e.time}</time></div>`).join("")
     : `<div class="empty">${b.running ? "Opening Chrome and searching… the first jobs show up here in a minute." : "No jobs were checked in this run."}</div>`;
   $("#siteSteps").innerHTML = (pl.sites || []).map(n => {
-    const s = p.sites[n], cur = b.running && p.site === n, done = s && !cur;
+    const s = p.sites[n], cur = b.running && (p.parallel ? (p.running_sites || []).includes(n) : p.site === n), done = s && !cur;
     return `<div class="site-step ${cur ? "cur" : done ? "done" : ""}"><span class="st">${cur ? "▶" : done ? "✓" : ""}</span>${siteLogo(n, 30)}<div style="flex:1;min-width:0"><b>${esc(n)}</b><div class="small muted">${s ? `${s.checked} checked · ${test ? s.dry : s.applied} ${test ? "good matches" : "applied"}${s.manual ? ` · ${s.manual} yourself` : ""}` : cur ? "searching…" : b.running ? "waiting its turn" : "not reached"}</div></div></div>`;
   }).join("") || `<div class="empty">No sites switched on.</div>`;
 }

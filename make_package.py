@@ -15,7 +15,7 @@ import zipfile
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-FILES = ["job_bot.py", "jobdb.py", "secret_store.py", "report.py", "dashboard.py", "make_package.py", "sites.yaml", "config.example.yaml",
+FILES = ["job_bot.py", "jobdb.py", "secret_store.py", "site_login.py", "report.py", "dashboard.py", "make_package.py", "sites.yaml", "config.example.yaml",
          "requirements.txt", "Install.bat", "Start Dashboard.bat", "start_chrome.bat", "README.md",
          "dashboard_ui/index.html"]
 

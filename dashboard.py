@@ -29,6 +29,7 @@ from datetime import datetime, timedelta
 import yaml
 import jobdb
 import secret_store
+import site_login
 from flask import Flask, jsonify, request, send_file, send_from_directory
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -50,10 +51,6 @@ RESUME_TYPES = {".pdf", ".doc", ".docx"}
 PORT = int(os.environ.get("JOBBOT_PORT", "8765"))
 SITE_NAMES = {"naukri": "Naukri", "linkedin": "LinkedIn", "foundit": "Foundit",
               "shine": "Shine", "cutshort": "Cutshort", "indeed": "Indeed"}
-LOGIN_URLS = ["https://accounts.google.com", "https://www.naukri.com/nlogin/login",
-              "https://www.linkedin.com/login", "https://www.foundit.in/rio/login",
-              "https://www.shine.com/myshine/login/", "https://cutshort.io/login",
-              "https://secure.indeed.com/auth"]
 
 app = Flask(__name__, static_folder=None)
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
@@ -169,12 +166,16 @@ PRETTY_SITE = {v.upper(): v for v in SITE_NAMES.values()}
 def blank_progress():
     return {"site": None, "keyword": None, "search": None, "waiting": None, "waiting_text": "",
             "counts": {k: 0 for k in ("checked", "applied", "manual", "skipped", "error", "dry")},
-            "sites": {}, "events": []}
+            "sites": {}, "events": [],
+            "parallel": False, "running_sites": [], "queue": []}   # queue: bots waiting for you, oldest first
 
 
 class Bot:
+    """Runs job_bot.py: one process for all sites in turn, or (parallel) one process per site at the same time."""
+
     def __init__(self):
-        self.proc = None
+        self.procs = {}          # site key -> process ("" when one process runs every site)
+        self.wrapping = False    # parallel run: all sites done, building the report
         self.lines = deque(maxlen=5000)
         self.offset = 0          # number of lines dropped from the front of the deque
         self.started = None
@@ -182,21 +183,40 @@ class Bot:
         self.exit_code = None
         self.mode = None
         self.trigger = None
+        self.parallel = False
         self.logfile = None
         self.progress = blank_progress()
 
     @property
     def running(self):
-        return self.proc is not None and self.proc.poll() is None
+        return self.wrapping or any(p.poll() is None for p in self.procs.values())
 
-    def _track(self, line):
+    @staticmethod
+    def _name(key):
+        if not key:
+            return None
+        if key in SITE_NAMES:
+            return SITE_NAMES[key]
+        try:
+            return (yaml.safe_load(open(SITES_FILE, encoding="utf-8")) or {}).get(key, {}).get("name") or key.title()
+        except Exception:
+            return key.title()
+
+    def _sync_waiting(self):
         p = self.progress
-        if (p["waiting"] and line.strip() and "Finish logging in" not in line and "YOUR TURN" not in line
+        head = p["queue"][0] if p["queue"] else None
+        p["waiting"], p["waiting_text"] = (head["kind"], head["text"]) if head else (None, "")
+
+    def _track(self, line, site=None):
+        p = self.progress
+        if (p["queue"] and line.strip() and "Finish logging in" not in line and "YOUR TURN" not in line
                 and not line.startswith("      Answer it")):
-            p["waiting"], p["waiting_text"] = None, ""
+            # more output from a bot that was waiting means it carried on
+            p["queue"] = [w for w in p["queue"] if site and w["site"] != site]
+            self._sync_waiting()
         m = RX_HEAD.match(line)
         if m:
-            p["site"], p["keyword"], p["search"] = PRETTY_SITE.get(m.group(1), m.group(1).title()), m.group(2), None
+            p["site"], p["keyword"], p["search"] = site or PRETTY_SITE.get(m.group(1), m.group(1).title()), m.group(2), None
             p["sites"].setdefault(p["site"], {k: 0 for k in p["counts"]})
             return
         m = RX_SEARCH.match(line)
@@ -206,7 +226,7 @@ class Bot:
         m = RX_JOB.match(line)
         if m:
             cat = category(m.group(1))
-            site = p["site"] or "?"
+            site = site or p["site"] or "?"
             per = p["sites"].setdefault(site, {k: 0 for k in p["counts"]})
             for bucket in (p["counts"], per):
                 bucket["checked"] += 1
@@ -215,94 +235,164 @@ class Bot:
                                 "category": cat, "match": int(m.group(2)), "title": m.group(3), "company": m.group(4)})
             del p["events"][:-200]
             return
-        if "Finish logging in" in line:
-            p["waiting"], p["waiting_text"] = "login", line.strip(" >.")
-        elif "YOUR TURN" in line:
-            p["waiting"], p["waiting_text"] = "answer", line.split("YOUR TURN:", 1)[-1].strip()
+        kind = "login" if "Finish logging in" in line else "answer" if "YOUR TURN" in line else None
+        if kind:
+            text = line.strip(" >.") if kind == "login" else line.split("YOUR TURN:", 1)[-1].strip()
+            p["queue"] = [w for w in p["queue"] if w["site"] != site] + [
+                {"site": site, "kind": kind, "text": f"{site}: {text}" if site and kind == "answer" else text}]
+            self._sync_waiting()
 
-    def _add(self, line):
+    def _add(self, line, site=None, own=False):
+        """own: a message from the dashboard itself, shown in the log but not read as bot output."""
+        shown = f"[{site}] {line}" if site and line.strip() else line
         with LOCK:
             if len(self.lines) == self.lines.maxlen:
                 self.offset += 1
-            self.lines.append(line)
+            self.lines.append(shown)
             try:
-                self._track(line)
+                if not own:
+                    self._track(line, site)
             except Exception:
                 pass
-        if self.logfile:
-            try:
-                self.logfile.write(line + "\n"); self.logfile.flush()
-            except Exception:
-                pass
+            if self.logfile:
+                try:
+                    self.logfile.write(shown + "\n"); self.logfile.flush()
+                except Exception:
+                    pass
 
-    def start(self, dry_run=None, trigger="manual", task=None):
+    def start(self, dry_run=None, trigger="manual", task=None, parallel=False):
         if self.running:
             return False, "The bot is already running."
+        cfg = load_config()
+        keys = [""]
+        if parallel and not task:
+            keys = [k for k in (cfg.get("run_order") or SITE_NAMES) if (cfg.get(k) or {}).get("enabled")]
+            if not keys:
+                return False, "No job sites are switched on."
         if os.path.exists(STOP_FILE):
             os.remove(STOP_FILE)
-        cfg = load_config()
         dry = bool(cfg.get("dry_run", True)) if dry_run is None else bool(dry_run)
         if task == "naukri_resume":
             dry = False
         env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1",
                    JOBBOT_DRY_RUN="1" if dry else "0", JOBBOT_FROM_DASHBOARD="1")
+        env.pop("JOBBOT_SITES", None); env.pop("JOBBOT_NO_REPORT", None)
         os.makedirs(LOG_DIR, exist_ok=True)
         stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
         self.logfile = open(os.path.join(LOG_DIR, f"run_{stamp}{'_naukri-resume' if task else '_test' if dry else ''}.log"), "w", encoding="utf-8")
+        self.parallel = keys != [""]
         with LOCK:
             self.lines.clear(); self.offset = 0
             self.progress = blank_progress()
+            self.progress["parallel"] = self.parallel
+            self.progress["running_sites"] = [self._name(k) for k in keys if k]
         self.started, self.finished, self.exit_code = datetime.now(), None, None
         self.mode, self.trigger = ("resume" if task else "test" if dry else "live"), trigger
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         args = [sys.executable, "-u", os.path.join(HERE, "job_bot.py")] + (["--naukri-resume"] if task == "naukri_resume" else [])
-        self.proc = subprocess.Popen(args, cwd=HERE, env=env,
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                     text=True, encoding="utf-8", errors="replace", bufsize=1, creationflags=flags)
         self._add(f"=== {'Updating your Naukri resume' if task else 'TEST run (no applications sent)' if dry else 'LIVE run'} started "
-                  f"{self.started:%d %b %Y %H:%M} ({trigger}) ===")
-        threading.Thread(target=self._pump, daemon=True).start()
+                  f"{self.started:%d %b %Y %H:%M} ({trigger}{', all sites at the same time' if self.parallel else ''}) ===", own=True)
+        with LOCK:   # held until every site's bot has started, so none counts as "the last one done" too early
+            self.procs = {}
+            for key in keys:
+                e = dict(env, JOBBOT_SITES=key, JOBBOT_NO_REPORT="1") if key else env
+                proc = subprocess.Popen(args, cwd=HERE, env=e,
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        text=True, encoding="utf-8", errors="replace", bufsize=1, creationflags=flags)
+                self.procs[key] = proc
+                threading.Thread(target=self._pump, args=(key, proc), daemon=True).start()
         return True, "Started."
 
-    def _pump(self):
-        proc = self.proc
+    def _pump(self, key, proc):
+        name = self._name(key)
         for line in proc.stdout:
-            self._add(line.rstrip("\r\n"))
+            self._add(line.rstrip("\r\n"), name)
         proc.wait()
-        self.exit_code, self.finished = proc.returncode, datetime.now()
-        self._add(f"=== Finished {self.finished:%H:%M} (exit code {proc.returncode}) ===")
-        if os.path.exists(STOP_FILE):
-            os.remove(STOP_FILE)
-        if self.logfile:
-            self.logfile.close(); self.logfile = None
+        with LOCK:
+            p = self.progress
+            if name in p["running_sites"]:
+                p["running_sites"].remove(name)
+            p["queue"] = [w for w in p["queue"] if w["site"] != name]
+            self._sync_waiting()
+            last = not any(q.poll() is None for q in self.procs.values()) and not self.wrapping
+            if last:
+                self.wrapping = True
+        if name:
+            self._add(f">> {name}: done (exit code {proc.returncode})", own=True)
+        if not last:
+            return
+        try:
+            if self.parallel and self.mode != "resume":
+                self._build_report()
+        finally:
+            codes = [q.returncode for q in self.procs.values()]
+            self.exit_code, self.finished = next((c for c in codes if c), 0), datetime.now()
+            self._add(f"=== Finished {self.finished:%H:%M} (exit code {self.exit_code}) ===", own=True)
+            if os.path.exists(STOP_FILE):
+                os.remove(STOP_FILE)
+            with LOCK:
+                if self.logfile:
+                    self.logfile.close(); self.logfile = None
+            self.wrapping = False
+
+    def _build_report(self):
+        """Parallel runs: each site's bot skips the report, so build and email it once here."""
+        since = self.started.replace(second=0, microsecond=0)
+        code = ("from datetime import datetime\nfrom report import build_report, send_report\n"
+                "try:\n    build_report()\n    send_report(since=datetime.fromisoformat(%r))\n"
+                "except Exception as e:\n    print(\"Couldn't build the Excel report:\", e, \"(run: python report.py)\")\n"
+                % since.isoformat())
+        try:
+            flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            r = subprocess.run([sys.executable, "-u", "-c", code], cwd=HERE, capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=300, creationflags=flags,
+                               env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+            for line in (r.stdout + r.stderr).splitlines():
+                self._add(line, own=True)
+        except Exception as e:
+            self._add(f"Couldn't build the Excel report: {e} (run: python report.py)", own=True)
 
     def stop(self):
         """Ask nicely: the bot finishes the current job, then builds the report and exits."""
         if not self.running:
             return False
         open(STOP_FILE, "w").close()
-        self._add(">> Stop requested. The bot will stop after the current job and save the report...")
+        self._add(">> Stop requested. The bot will stop after the current job and save the report...", own=True)
         return True
 
     def kill(self):
         if not self.running:
             return False
-        self.proc.kill()
-        self._add(">> Bot force-stopped.")
+        for proc in self.procs.values():
+            if proc.poll() is None:
+                proc.kill()
+        self._add(">> Bot force-stopped.", own=True)
         return True
 
     def send_enter(self, text=""):
+        """Continue: answers the bot that has been waiting longest (in a parallel run, that site's bot)."""
         if not self.running:
             return False
-        try:
-            self.proc.stdin.write(text + "\n"); self.proc.stdin.flush()
-            self._add(f">> (sent Enter from dashboard)")
-            return True
-        except Exception:
-            return False
+        with LOCK:
+            queue = self.progress["queue"]
+            head = queue[0] if queue else None
+            if head:
+                queue.pop(0); self._sync_waiting()
+        key = next((k for k in self.procs if self._name(k) == head["site"]), None) if head and head["site"] else None
+        targets = [self.procs[key]] if key is not None else list(self.procs.values())
+        sent = False
+        for proc in targets:
+            if proc.poll() is None:
+                try:
+                    proc.stdin.write(text + "\n"); proc.stdin.flush(); sent = True
+                except Exception:
+                    pass
+        if sent:
+            self._add(f">> (sent Enter from dashboard{' to ' + head['site'] if head and head['site'] else ''})", own=True)
+        return sent
 
     def state(self):
-        return {"running": self.running, "mode": self.mode, "trigger": self.trigger,
+        return {"running": self.running, "mode": self.mode, "trigger": self.trigger, "parallel": self.parallel,
                 "started": self.started.isoformat() if self.started else None,
                 "finished": self.finished.isoformat() if self.finished else None,
                 "exit_code": self.exit_code, "stopping": os.path.exists(STOP_FILE) and self.running,
@@ -338,14 +428,32 @@ def chrome_connected():
         return False
 
 
-def open_chrome(with_logins=True):
+def login_urls(keys=None):
+    """Login pages to open: the given site keys, or Google plus every switched-on site."""
+    cfg = load_config()
+    try:
+        extra = yaml.safe_load(open(SITES_FILE, encoding="utf-8")) or {}
+    except Exception:
+        extra = {}
+    return [s["url"] for s in site_login.sites(cfg, extra) if (s["key"] in keys if keys else s["enabled"])]
+
+
+def open_chrome(with_logins=True, sites=None):
+    """Open the bot's Chrome. with_logins: also a login tab per site (sites = only these keys),
+    added as new tabs when Chrome is already open, so you can sign in again any time."""
+    urls = login_urls(sites) if with_logins else []
     if chrome_connected():
-        return True, "Chrome is already open in bot mode."
+        if not urls:
+            return True, "Chrome is already open in bot mode."
+        n = site_login.open_tabs(urls)
+        if not n:
+            return False, "Couldn't open the login tabs. Close ALL Chrome windows and try again."
+        return True, f"Opened {n} login tab{'s' if n != 1 else ''} in the bot's Chrome."
     exe = find_chrome()
     if not exe:
         return False, "Google Chrome was not found. Install it from https://www.google.com/chrome"
     args = [exe, "--remote-debugging-port=9222", f"--user-data-dir={CHROME_PROFILE}", "--no-first-run"]
-    subprocess.Popen(args + (LOGIN_URLS if with_logins else []), cwd=HERE)
+    subprocess.Popen(args + urls, cwd=HERE)
     for _ in range(20):
         time.sleep(0.5)
         if chrome_connected():
@@ -637,7 +745,7 @@ def api_bot_start():
         ok, msg = open_chrome(with_logins=False)
         if not ok:
             return jsonify(ok=False, error=msg), 400
-    ok, msg = BOT.start(dry_run=body.get("dry_run"))
+    ok, msg = BOT.start(dry_run=body.get("dry_run"), parallel=bool(body.get("parallel")))
     return jsonify(ok=ok, error=None if ok else msg)
 
 
@@ -700,6 +808,38 @@ def api_log_file(name):
 def api_chrome_open():
     ok, msg = open_chrome()
     return jsonify(ok=ok, message=msg, error=None if ok else msg)
+
+
+# ------------------------------------------------------------------ logins (sign in to the sites, separately from a run)
+@app.get("/api/logins")
+def api_logins():
+    try:
+        extra = yaml.safe_load(open(SITES_FILE, encoding="utf-8")) or {}
+    except Exception:
+        extra = {}
+    return jsonify(sites=site_login.sites(load_config(), extra), chrome=chrome_connected(),
+                   chrome_found=bool(find_chrome()))
+
+
+@app.post("/api/logins/open")
+def api_logins_open():
+    """Open login tabs: {"sites": ["naukri"]} for one or more sites, nothing for Google + every switched-on site."""
+    keys = (request.get_json(silent=True) or {}).get("sites") or None
+    ok, msg = open_chrome(with_logins=True, sites=keys)
+    return jsonify(ok=ok, message=msg, error=None if ok else msg), (200 if ok else 400)
+
+
+@app.post("/api/logins/mark")
+def api_logins_mark():
+    """{"site": "naukri", "signed_in": true}, or {"all": true} for Google + every switched-on site."""
+    body = request.get_json(silent=True) or {}
+    cfg = load_config()
+    on = body.get("signed_in", True)
+    keys = [s["key"] for s in site_login.sites(cfg) if s["enabled"]] if body.get("all") else [body.get("site")]
+    for k in filter(None, keys):
+        site_login.mark(cfg, k, on)
+    save_config(cfg)
+    return jsonify(ok=True, signed_in=cfg["dashboard"]["signed_in"])
 
 
 @app.post("/api/report/build")
